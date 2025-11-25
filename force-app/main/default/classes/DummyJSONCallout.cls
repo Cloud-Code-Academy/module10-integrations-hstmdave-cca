@@ -34,6 +34,7 @@ public with sharing class DummyJSONCallout {
      * @param dummyUserId The ID of the user in the external system to fetch data for.
      */
 
+	@future(callout=true)
 	public static void getDummyJSONUserFromId(String dummyUserId) {
 		// Create HTTP request to send.
 
@@ -44,8 +45,30 @@ public with sharing class DummyJSONCallout {
 		// Send the HTTP request and get the response.
 
 		// If the HTTP response code is successful, parse the JSON response and update the contact.
-		Contact cont = null;
-		upsert cont DummyJSON_Id__c; //insert/update from the JSON response using the external id (dummyUserId)
+
+		//insert/update from the JSON response using the external id (dummyUserId)
+
+		Contact cont = new Contact();
+
+
+		HttpRequest request = new HttpRequest();
+		request.setEndpoint('callout:DummyJsonUser' + '/' + dummyUserId);
+		request.setMethod('GET');
+
+		Http http = new Http();
+		HttpResponse response = http.send(request);
+
+		if(response.getStatusCode() >= 200 && response.getStatusCode() <= 299) {
+			cont = createContactFromJson(response.getBody());
+		}
+		
+
+		if(cont.DummyJSON_Id__c != null && cont.DummyJSON_Id__c != '') {
+			upsert cont DummyJSON_Id__c;
+		} else {
+			System.debug('Failed to retrieve a response or update a contact');
+		}
+ 		
 	}
 
 	/* 
@@ -75,7 +98,26 @@ public with sharing class DummyJSONCallout {
 
 		// Set the address fields on the contact.
 
-		return null;
+		Map<String, Object> jsonMap = (Map<String, Object>) JSON.deserializeUntyped(jsonResponse);
+		Map<String, Object> addressMap = (Map<String, Object>) jsonMap.get('address');
+
+		Contact jsonContact = new Contact();
+		// line 107 was originally jsonContact.DummyJSON_Id__c = (String) jsonMap.get('id'); but it failed due to invalid conversion at runtime
+		// tried corrections offered by Agentforce Vibes to use an Object b/c they can accept multiple data types and then use String.valueOf
+		Object rawId = jsonMap.get('id');
+		jsonContact.DummyJSON_Id__c = String.valueOf(rawId);
+		jsonContact.FirstName = (String) jsonMap.get('firstName');
+		jsonContact.LastName = (String) jsonMap.get('lastName');
+		jsonContact.Email = (String) jsonMap.get('email');
+		jsonContact.Phone = (String) jsonMap.get('phone');
+		jsonContact.Birthdate = Date.valueOf((String) jsonMap.get('birthDate'));
+		jsonContact.MailingStreet = (String) addressMap.get('address');
+		jsonContact.MailingCity = (String) addressMap.get('city');
+		jsonContact.MailingPostalCode = (String) addressMap.get('postalCode');
+		jsonContact.MailingState = (String) addressMap.get('state');
+		jsonContact.MailingCountry = (String) addressMap.get('country');
+
+		return jsonContact;
 	}
 
 	/* 
@@ -92,6 +134,7 @@ public with sharing class DummyJSONCallout {
      * @param contactId The Salesforce Contact ID used to generate the JSON payload for the external system.
      */
 	
+	@future(callout=true)
 	public static void postCreateDummyJSONUser(String contactId) {
 		// Create HTTP request to send.
 
@@ -104,6 +147,27 @@ public with sharing class DummyJSONCallout {
 		// Send the HTTP request and get the response.
 
 		// If the HTTP response code is successful, update the contact.
+		if(contactId == null || contactId == ''){
+			return;
+		}
+
+		Contact cont = new Contact();
+		cont.Id = contactId;
+
+		HttpRequest request = new HttpRequest();
+		request.setEndpoint('callout:DummyJsonUser' + '/add');
+		request.setMethod('POST');
+		request.setBody(generateDummyJsonUserPayload(cont.Id));
+
+		Http http = new Http();
+		HttpResponse response = http.send(request);
+
+		if(response.getStatusCode() >= 200 && response.getStatusCode() <= 299) {
+			// need to access the related contact record and update the DummyJSON_Last_Updated__c field to System.now()
+			cont.DummyJSON_Last_Updated__c = System.now();
+			// need to upsert contact
+			update cont;
+		}
 	}
 
 	/*
@@ -131,6 +195,24 @@ public with sharing class DummyJSONCallout {
 		// Make sure to check that required contacts fields have a value. Default the value to unknown if it does not exists.
 		// Integration data can change over time. It is a best practice to add safeguards/validation to ensure the integration does not break.
 
-		return null;
+		Map<String,Object> jsonMap = new Map<String,Object>();
+
+		Contact contactRecord = [
+			SELECT Id, FirstName, LastName, Email, Phone
+			FROM Contact
+			WHERE Id = :contactId
+			LIMIT 1
+		];
+
+		jsonMap.put('salesforceId', contactRecord.Id);
+		jsonMap.put('firstName', contactRecord.FirstName);
+		jsonMap.put('lastName', contactRecord.LastName);
+		jsonMap.put('email', contactRecord.Email);
+		jsonMap.put('phone', contactRecord.Phone);
+
+		String jsonPayload = JSON.serialize(jsonMap);
+
+		return jsonPayload;
 	}
+	
 }
